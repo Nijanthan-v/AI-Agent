@@ -1,0 +1,31 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Databases & local logs
+support_agent.db
+*.db
+*.sqlite3
+*.log
+
+# Environment variables & secrets (NEVER COMMIT)
+.env
+.env.local
+.env.*.local
+
+# Node & Next.js
+dashboard/node_modules/
+dashboard/.next/
+dashboard/out/
+dashboard/build/
+node_modules/
+.next/
+
+# OS files
+.DS_Store
+Thumbs.db
