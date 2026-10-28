@@ -12,15 +12,3 @@ services:
       - DATABASE_URL=${DATABASE_URL}
       - PORT=8000
     restart: always
-
-  dashboard:
-    build:
-      context: ./dashboard
-      dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
-    depends_on:
-      - agent-api
-    restart: always

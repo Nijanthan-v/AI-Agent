@@ -1,6 +1,6 @@
 # ⚡ Tier-2 Autonomous Support & Root-Cause Diagnostic AI Agent
 
-An end-to-end, production-grade **Tier-2 Autonomous Customer Support & Diagnostic AI Agent** powered by **LangGraph**, **Google Gemini**, **Neon Cloud PostgreSQL**, and a **Next.js 16 Operator Dashboard**.
+An end-to-end, production-grade **Tier-2 Autonomous Customer Support & Diagnostic AI Agent** powered by **LangGraph**, **Google Gemini**, **Neon Cloud PostgreSQL**, and an independent **Next.js 16 Operator Dashboard** ([support-agent-ui](https://github.com/Nijanthan-v/support-agent-ui)).
 
 Built with a **deterministic anti-hallucination circuit breaker** and a **Human-in-the-Loop (HITL) 1-Click approval gate** to safely resolve customer billing, webhook failure, and account suspension issues.
 
@@ -10,7 +10,7 @@ Built with a **deterministic anti-hallucination circuit breaker** and a **Human-
 
 ```mermaid
 flowchart TD
-    subgraph Frontend["🖥️ Operator Portal (Next.js 16 + React 19)"]
+    subgraph Frontend["🖥️ Operator Portal (support-agent-ui)"]
         UI["Support Operator Dashboard\n(Glassmorphism Dark Mode)"]
         Queue["Real-time Ticket Queue"]
         Inspector["Evidence & Root Cause Inspector"]
@@ -21,10 +21,10 @@ flowchart TD
         API["FastAPI Endpoints\n(/diagnose, /approve, /reject, /tickets)"]
         
         subgraph Graph["LangGraph Diagnostic Workflow"]
-            N1["node_extract_context"] --> N2["node_query_tools"]
-            N2 --> N3["node_reason_root_cause"]
+            N1["node_fetch_context"] --> N2["node_execute_tools"]
+            N2 --> N3["node_analyze_root_cause"]
             N3 --> N4["node_audit_verification\n(Deterministic Circuit Breaker)"]
-            N4 --> N5["node_draft_resolution"]
+            N4 --> N5["node_human_approval_gate"]
         end
     end
 
@@ -34,7 +34,7 @@ flowchart TD
         LLM["Google Gemini\n(gemini-3.8-flash / 3.6-flash fallback)"]
     end
 
-    UI --> API
+    UI -->|HTTP REST| API
     API --> Graph
     N2 --> NeonDB
     N2 --> Stripe
@@ -47,11 +47,11 @@ flowchart TD
 
 ## 🚀 Key Features
 
-* **LangGraph Multi-Agent Orchestration**: Structured state machine graph with automatic multi-model fallback (`gemini-3.8-flash` ➔ `gemini-3.6-flash`), request timeout safeguards, and retry handling.
+* **LangGraph Multi-Agent Orchestration**: Structured state machine graph with automatic multi-model fallback (`gemini-3.8-flash` ➔ `gemini-3.6-flash` ➔ `gpt-4o-mini`), request timeout safeguards, and retry handling.
 * **Deterministic Anti-Hallucination Circuit Breaker**: Pure Python deterministic verification node (`node_audit_verification`) that validates LLM proposals against ground-truth database state. Prevents illegal double refunds, unearned upgrades, and improper suspensions before reaching the operator.
 * **Human-in-the-Loop (HITL) Approval Gate**: Autonomous resolution drafting with mandatory human operator sign-off (`/approve` to execute live database/billing changes, or `/reject` to veto and escalate to Tier-3).
 * **Live Neon Cloud PostgreSQL**: Real serverless PostgreSQL connection with connection pooling and SSL encryption, tracking users, system logs, Stripe charges, and tickets.
-* **Modern Operator Dashboard**: Next.js 16 (React 19) interface featuring dark-mode glassmorphism, real-time ticket queue, root-cause inspector, and 1-click simulation modal.
+* **Decoupled Architecture**: Cleanly separated backend AI agent service and frontend operator portal ([support-agent-ui](https://github.com/Nijanthan-v/support-agent-ui)).
 
 ---
 
@@ -67,18 +67,12 @@ flowchart TD
 ├── test_agent.py            # Headless 1-second CLI agent testing script
 ├── requirements.txt         # Python backend dependencies
 ├── Dockerfile               # Production Dockerfile for FastAPI microservice
-├── docker-compose.yml       # Full-stack Docker orchestration
+├── docker-compose.yml       # Docker orchestration for agent API
 ├── .env.example             # Template for required environment variables
-├── .gitignore               # Multi-layer secret & build artifact protection
-└── dashboard/               # Next.js 16 Operator Dashboard
-    ├── Dockerfile           # Next.js production Dockerfile
-    ├── package.json         # Node.js dependencies
-    └── src/
-        └── app/
-            ├── page.tsx     # Operator Dashboard UI
-            ├── globals.css  # Dark-mode glassmorphism styles
-            └── layout.tsx   # Root layout & Google typography
+└── .gitignore               # Multi-layer secret & build artifact protection
 ```
+
+> **Frontend Portal**: The Next.js 16 operator dashboard is housed in a separate repository: **[support-agent-ui](https://github.com/Nijanthan-v/support-agent-ui)**.
 
 ---
 
@@ -86,8 +80,7 @@ flowchart TD
 
 ### Prerequisites
 * Python 3.10+
-* Node.js 18+ & npm
-* Google Gemini API Key
+* Google Gemini API Key (or OpenAI API Key)
 
 ### 1. Clone the Repository
 ```bash
@@ -124,11 +117,12 @@ python server.py
 * **API URL**: `http://localhost:8000`
 * **Swagger UI / Interactive API Docs**: `http://localhost:8000/docs`
 
-### 4. Start the Operator Dashboard (Next.js 16)
-In a new terminal:
+### 4. Start the Operator Dashboard (Frontend)
+Run the separate frontend repository [support-agent-ui](https://github.com/Nijanthan-v/support-agent-ui):
 ```bash
-cd dashboard
+cd ../support-agent-ui
 npm install
+cp .env.example .env.local
 npm run dev
 ```
 * **Dashboard URL**: `http://localhost:3000`
