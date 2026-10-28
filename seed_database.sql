@@ -30,6 +30,29 @@ CREATE TABLE IF NOT EXISTS stripe_charges (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 4. Create Persistent Diagnostic Tickets Table
+CREATE TABLE IF NOT EXISTS tickets (
+    ticket_id VARCHAR(64) PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL,
+    user_email VARCHAR(128) NOT NULL,
+    stripe_customer_id VARCHAR(64),
+    issue_description TEXT NOT NULL,
+    trace_id VARCHAR(64),
+    root_cause TEXT,
+    proposed_action VARCHAR(64),
+    proposed_action_details TEXT,
+    customer_response_message TEXT,
+    audit_passed BOOLEAN DEFAULT TRUE,
+    audit_error TEXT,
+    status VARCHAR(32) NOT NULL DEFAULT 'awaiting_approval',
+    operator_notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
+CREATE INDEX IF NOT EXISTS idx_tickets_created_at ON tickets(created_at DESC);
+
 -- Seed Sample Data (Clean slate insert)
 TRUNCATE TABLE stripe_charges, system_logs, users CASCADE;
 

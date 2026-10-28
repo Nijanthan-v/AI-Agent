@@ -1,17 +1,22 @@
 import os
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Dict, Any, Optional
-
+from pydantic import BaseModel, Field
 
 from agent import run_agent
 from tools import (
+    init_db_pool,
+    close_db_pool,
+    get_db_cursor,
     execute_resolution_action,
     save_ticket_tool,
     get_tickets_tool,
@@ -19,26 +24,48 @@ from tools import (
     update_ticket_status_tool
 )
 
+# Configure structured logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger("agent.server")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Manages startup and shutdown events for production deployment.
+    """
+    logger.info("🚀 Starting AI Agent Microservice API...")
+    init_db_pool(minconn=2, maxconn=20)
+    yield
+    logger.info("🛑 Shutting down AI Agent Microservice API...")
+    close_db_pool()
+
 app = FastAPI(
     title="AI Agent Microservice API",
     description="Dynamic LangGraph AI Agent with Deterministic Anti-Hallucination Circuit Breaker and PostgreSQL Persistence.",
-    version="1.0.0"
+    version="1.1.0",
+    lifespan=lifespan
 )
 
-# Enable CORS for external Frontend UI apps
+# CORS Middleware (Configurable via environment variable)
+cors_origins_raw = os.getenv("CORS_ORIGINS", "*")
+allowed_origins = [o.strip() for o in cors_origins_raw.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins if allowed_origins else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 class DiagnoseRequest(BaseModel):
-    user_id: Optional[str] = "usr_alex_01"
-    user_email: Optional[str] = "alex@techcorp.io"
-    stripe_customer_id: Optional[str] = "cus_stripe_alex123"
-    issue_description: str
+    user_id: Optional[str] = Field(default="usr_alex_01", description="Unique user identifier")
+    user_email: Optional[str] = Field(default="alex@techcorp.io", description="Customer email address")
+    stripe_customer_id: Optional[str] = Field(default="cus_stripe_alex123", description="Associated Stripe customer ID")
+    issue_description: str = Field(..., description="Customer escalation complaint including any trace IDs")
 
 class ApproveRequest(BaseModel):
     user_id: str
@@ -52,66 +79,104 @@ class RejectRequest(BaseModel):
     ticket_id: Optional[str] = None
     reason: Optional[str] = "Operator rejected automated resolution"
 
-@app.get("/health")
-def health_check():
+
+@app.get("/health", tags=["Monitoring"])
+async def health_check():
+    """
+    Active health check reporting database connectivity, engine type, and service state.
+    """
+    db_status = "offline"
+    engine_name = "unknown"
+    
+    try:
+        with get_db_cursor() as (cursor, engine):
+            cursor.execute("SELECT 1;")
+            db_status = "connected"
+            engine_name = engine
+    except Exception as e:
+        logger.error("Health check DB query failed: %s", e)
+        db_status = f"error: {str(e)[:60]}"
+
     return {
-        "status": "online",
+        "status": "online" if db_status == "connected" else "degraded",
         "service": "AI Agent Microservice",
+        "version": "1.1.0",
         "orchestrator": "LangGraph StateGraph",
         "auditor": "Deterministic Anti-Hallucination Circuit Breaker",
-        "persistence": "PostgreSQL tickets"
+        "database": {
+            "status": db_status,
+            "engine": engine_name
+        }
     }
 
-@app.get("/tickets")
-def list_tickets(status: Optional[str] = None):
+
+@app.get("/tickets", tags=["Tickets"])
+async def list_tickets(status: Optional[str] = None):
     """
     Fetches all tickets, optionally filtered by status (awaiting_approval, resolved, rejected).
+    Non-blocking offload to thread pool.
     """
-    tickets = get_tickets_tool(status)
+    tickets = await asyncio.to_thread(get_tickets_tool, status)
     return {"count": len(tickets), "tickets": tickets}
 
-@app.get("/tickets/{ticket_id}")
-def get_single_ticket(ticket_id: str):
+
+@app.get("/tickets/{ticket_id}", tags=["Tickets"])
+async def get_single_ticket(ticket_id: str):
     """
-    Fetches details for a specific ticket.
+    Fetches full diagnostic details and audit trail for a specific ticket.
     """
-    ticket = get_ticket_by_id_tool(ticket_id)
+    ticket = await asyncio.to_thread(get_ticket_by_id_tool, ticket_id)
     if not ticket:
-        raise HTTPException(status_code=404, detail=f"Ticket '{ticket_id}' not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Ticket '{ticket_id}' not found."
+        )
     return ticket
 
-@app.post("/diagnose")
-def diagnose_ticket(req: DiagnoseRequest):
+
+@app.post("/diagnose", tags=["Agent Workflow"])
+async def diagnose_ticket(req: DiagnoseRequest):
     """
-    Triggers the LangGraph agent for a dynamic request payload and persists the ticket to PostgreSQL.
+    Dispatches customer payload to the LangGraph state machine.
+    Offloaded to a worker thread so the async event loop is never blocked.
     """
-    if not req.issue_description:
-        raise HTTPException(status_code=400, detail="issue_description is required.")
-        
-    result = run_agent(req.model_dump())
+    if not req.issue_description.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="issue_description is required."
+        )
+
+    # Run LangGraph state machine asynchronously in thread pool
+    result = await asyncio.to_thread(run_agent, req.model_dump())
     
-    # Persist the ticket and its full audit trail to database
-    ticket_id = save_ticket_tool(result)
+    # Persist ticket and audit trail to database
+    ticket_id = await asyncio.to_thread(save_ticket_tool, result)
     result["ticket_id"] = ticket_id
     
     return result
 
-@app.post("/approve")
-def approve_resolution(req: ApproveRequest):
+
+@app.post("/approve", tags=["Operator Gate"])
+async def approve_resolution(req: ApproveRequest):
     """
     Executes an approved resolution action in the database and updates ticket status to 'resolved'.
     """
     if not req.user_id or not req.action:
-        raise HTTPException(status_code=400, detail="user_id and action are required.")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="user_id and action are required."
+        )
         
-    result = execute_resolution_action(
+    result = await asyncio.to_thread(
+        execute_resolution_action,
         action=req.action,
         user_id=req.user_id,
         customer_id=req.stripe_customer_id
     )
     
     # Update ticket status in database
-    update_ticket_status_tool(
+    await asyncio.to_thread(
+        update_ticket_status_tool,
         status="resolved" if result["success"] else "action_failed",
         ticket_id=req.ticket_id,
         user_id=req.user_id,
@@ -126,12 +191,14 @@ def approve_resolution(req: ApproveRequest):
         "operator_notes": req.operator_notes
     }
 
-@app.post("/reject")
-def reject_resolution(req: RejectRequest):
+
+@app.post("/reject", tags=["Operator Gate"])
+async def reject_resolution(req: RejectRequest):
     """
-    Rejects the proposed resolution and routes the ticket to manual human escalation.
+    Rejects the proposed resolution and routes the ticket to manual Tier-3 escalation.
     """
-    update_ticket_status_tool(
+    await asyncio.to_thread(
+        update_ticket_status_tool,
         status="rejected",
         ticket_id=req.ticket_id,
         user_id=req.user_id,
@@ -146,6 +213,8 @@ def reject_resolution(req: RejectRequest):
         "details": f"Automated action for user '{req.user_id}' rejected by operator. Escalated to tier-3 manual queue."
     }
 
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)
